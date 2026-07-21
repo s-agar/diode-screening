@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# TODO: Detect BFOM as well
 
 DEFAULT_INPUT_DIR = "extracted_zotero_grobid"
 DEFAULT_OUTPUT_DIR = "evidence_detection"
@@ -606,7 +607,7 @@ def normalize_legacy_pdf_symbol_artifacts(text: str) -> str:
     sep = r"[ \t\r\f\v\-:/\\.,;]{0,8}"
     cm2_lookahead = r"(?=c[ \t\r\f\v]{0,3}m[ \t\r\f\v]{0,3}(?:\^?[ \t\r\f\v]{0,3}2|-[ \t\r\f\v]{0,3}2)|cm2)"
     text = re.sub(
-        r"\bm[ \t\r\f\v]{0,3}(?:ohms?|[oO0qQxXΩΩω])" + sep + cm2_lookahead,
+        r"(?<![A-Za-z_])m[ \t\r\f\v]{0,3}(?:ohms?|[oO0qQxXΩΩω])" + sep + cm2_lookahead,
         "mohm ",
         text,
         flags=re.IGNORECASE,
@@ -836,8 +837,8 @@ BV_PATTERNS_GENERAL = [
 BV_PATTERN_TITLE = re.compile(rf"(?i)\b{NUMBER_PATTERN}\s*{VOLTAGE_UNIT_PATTERN}\b")
 
 
-RON_UNIT_PATTERN = r"(?P<unit>m\s*ohm|mohm|milliohm|ohm|ohms|m)"
-RON_AREA_PATTERN = r"(?:cm\s*\^?\s*2|cm2|cm\s*-\s*2|cm\s*/?\s*sup\s*2)"
+RON_UNIT_PATTERN = r"(?P<unit>m\s*ohm|mohm|milliohm|mQ|mX|m0|mO|mΩ|mΩ|mω|ohm|ohms|m)"
+RON_AREA_PATTERN = r"(?:cm\s*\^?\s*2|cm2|cm\s*-\s*2|cm\s*/?\s*sup\s*2|cm)"
 RON_KEYWORD_PATTERN_TEXT = (
     r"(?:"
     r"R\s*on\s*,?\s*sp|R_on\s*,?\s*sp|Ron\s*,?\s*sp|Ronsp|RONA|"
