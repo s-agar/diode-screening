@@ -664,6 +664,9 @@ def normalize_for_search(text: str) -> str:
     text = re.sub(r"\bm\s*Ω\b", "mohm", text, flags=re.IGNORECASE)
     text = re.sub(r"\bm\s*Ω\b", "mohm", text, flags=re.IGNORECASE)
 
+    text = re.sub(r"\b(mohm|ohm)\s*[-‐-‒–—−•·×]?\s*cm\s*\^?\s*2\b", r"\1 cm2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bcm\s*\^?\s*2\b", "cm2", text, flags=re.IGNORECASE)
+
     return text
 
 
