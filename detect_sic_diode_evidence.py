@@ -867,6 +867,15 @@ RON_PATTERNS_GENERAL = [
 ]
 RON_PATTERN_TITLE = re.compile(rf"(?i)\b{NUMBER_PATTERN}\s*[- ]?\s*{RON_UNIT_PATTERN}\s*[- ]?\s*{RON_AREA_PATTERN}\b")
 
+NUMERIC_TOKEN = r"(?:\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)"
+
+def _find_value_before(text: str, unit_start: int, window: int = 60) -> Optional[str]:
+    left = text[max(0, unit_start - window) : unit_start]
+    nums = list(re.finditer(NUMERIC_TOKEN, left))
+    if nums:
+        return nums[-1].group(0)
+    return None
+
 
 def term_found(text: str, term: str) -> bool:
     return bool(compiled_phrase_pattern(term).search(text))
@@ -1278,6 +1287,76 @@ def detect_specific_on_resistance(source: dict) -> List[dict]:
     title_like_source = source.get("source_type") in {"metadata_title", "grobid_title"}
     if title_like_source:
         patterns.append(RON_PATTERN_TITLE)
+
+    # Unit-first pass: handle cases like "8.1 to 18.7 mOhm cm2" where the
+    # main RON regex fails because the captured numeric isn't adjacent to the
+    # unit. Search for unit occurrences and look left for the nearest numeric
+    # token (preferring the right-hand value in ranges).
+    unit_only_re = re.compile(rf"(?i){RON_UNIT_PATTERN}\s*[- ]?\s*{RON_AREA_PATTERN}")
+    for um in unit_only_re.finditer(text):
+        try:
+            unit_raw = um.groupdict().get("unit") or um.group(0)
+        except Exception:
+            unit_raw = um.group(0)
+
+        val_str = _find_value_before(text, um.start(), window=60)
+        if not val_str:
+            continue
+
+        try:
+            value = float(val_str.replace(",", ""))
+        except Exception:
+            continue
+
+        # expand snippet to include the numeric we found
+        snippet = context_window(text, max(0, um.start() - 60), um.end())
+        snippet_l = normalize_for_search(snippet).lower()
+
+        if should_skip_evidence_snippet(snippet):
+            continue
+
+        ctx = classify_context(snippet)
+
+        unit_norm = normalize_for_search(unit_raw).lower().replace(" ", "")
+        if unit_norm == "m":
+            has_ron_context = bool(RON_KEYWORD_RE.search(snippet_l))
+            if not has_ron_context and not title_like_source:
+                continue
+
+        if title_like_source and not has_any(text, DEVICE_TERMS):
+            continue
+
+        normalized_value, normalized_unit = normalize_resistance_area(value, unit_raw)
+
+        score = evidence_score_base(source.get("source_type", "")) + 5
+        if title_like_source:
+            score += 3
+        if source.get("source_type") == "grobid_abstract":
+            score += 1
+        if RON_KEYWORD_RE.search(snippet_l):
+            score += 2
+        if has_any(snippet, ["measured", "experimental", "fabricated", "forward", "differential", "demonstrating", "obtained"]):
+            score += 3
+        if has_any(snippet, ["drift layer", "theoretical", "calculated", "simulated"]):
+            score -= 1
+        if ctx["comparison_risk"]:
+            score -= 2
+
+        evidence.append({
+            "field": "specific_on_resistance",
+            "value": value,
+            "raw_value": f"{value:g} {unit_raw} cm^2",
+            "unit": f"{unit_raw} cm^2",
+            "normalized_value": normalized_value,
+            "normalized_unit": normalized_unit,
+            "source_type": source.get("source_type", ""),
+            "source_id": source.get("source_id", ""),
+            "page": source.get("page", ""),
+            "heading": source.get("heading", ""),
+            "snippet": clean_space(snippet),
+            "score": score,
+            **ctx,
+        })
 
     for pattern in patterns:
         for match in pattern.finditer(text):
