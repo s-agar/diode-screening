@@ -607,7 +607,7 @@ def normalize_legacy_pdf_symbol_artifacts(text: str) -> str:
     sep = r"[ \t\r\f\v\-:/\\.,;]{0,8}"
     cm2_lookahead = r"(?=c[ \t\r\f\v]{0,3}m[ \t\r\f\v]{0,3}(?:\^?[ \t\r\f\v]{0,3}2|-[ \t\r\f\v]{0,3}2)|cm2)"
     text = re.sub(
-        r"(?<![A-Za-z_])m[ \t\r\f\v]{0,3}(?:ohms?|[oO0qQxXΩΩω])" + sep + cm2_lookahead,
+        r"(?<![A-Za-z_])m[ \t\r\f\v]{0,3}(?:ohms?|[oO0qQxXΩΩω&V])" + sep + cm2_lookahead,
         "mohm ",
         text,
         flags=re.IGNORECASE,
@@ -1335,7 +1335,7 @@ def detect_specific_on_resistance(source: dict) -> List[dict]:
         if source.get("source_type") == "grobid_abstract":
             score += 1
         if RON_KEYWORD_RE.search(snippet_l):
-            score += 2
+            score += 6
         if has_any(snippet, ["measured", "experimental", "fabricated", "forward", "differential", "demonstrating", "obtained"]):
             score += 3
         if has_any(snippet, ["drift layer", "theoretical", "calculated", "simulated"]):
@@ -1393,7 +1393,7 @@ def detect_specific_on_resistance(source: dict) -> List[dict]:
             if source.get("source_type") == "grobid_abstract":
                 score += 1
             if RON_KEYWORD_RE.search(snippet_l):
-                score += 2
+                score += 6
             if has_any(snippet, ["measured", "experimental", "fabricated", "forward", "differential", "demonstrating", "obtained"]):
                 score += 3
             if has_any(snippet, ["drift layer", "theoretical", "calculated", "simulated"]):
