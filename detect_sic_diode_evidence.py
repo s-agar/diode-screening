@@ -12,8 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# TODO: Detect BFOM as well
-
 DEFAULT_INPUT_DIR = "extracted_zotero_grobid"
 DEFAULT_OUTPUT_DIR = "evidence_detection"
 
@@ -866,6 +864,33 @@ RON_PATTERNS_GENERAL = [
         rf"\b(?P<keyword2>{RON_KEYWORD_PATTERN_TEXT})\b"
     ),
 ]
+
+
+BFOM_KEYWORD_PATTERN_TEXT = (
+    r"(?:"
+    r"Baliga(?:['’]s)?\s+(?:specific\s+)?(?:figure[\s-]*of[\s-]*merit|FOMs?)|"
+    r"B[\s-]*FOMs?|"
+    r"(?:specific\s+)?figure[\s-]*of[\s-]*merit|"
+    r"FOMs?"
+    r")"
+)
+BFOM_KEYWORD_RE = re.compile(BFOM_KEYWORD_PATTERN_TEXT, flags=re.IGNORECASE)
+BFOM_UNIT_PATTERN = (
+    r"(?P<unit>(?:GW|MW|kW|W)\s*"
+    r"(?:/\s*cm\s*\^?\s*2|cm\s*\^?\s*-\s*2))"
+)
+BFOM_PATTERNS_GENERAL = [
+    re.compile(
+        rf"(?i)\b(?P<keyword>{BFOM_KEYWORD_PATTERN_TEXT})\b"
+        rf"[^.;\n]{{0,260}}?"
+        rf"{NUMBER_PATTERN}\s*[- ]?\s*{BFOM_UNIT_PATTERN}"
+    ),
+    re.compile(
+        rf"(?i){NUMBER_PATTERN}\s*[- ]?\s*{BFOM_UNIT_PATTERN}"
+        rf"[^.;\n]{{0,260}}?"
+        rf"\b(?P<keyword2>{BFOM_KEYWORD_PATTERN_TEXT})\b"
+    ),
+]
 RON_PATTERN_TITLE = re.compile(rf"(?i)\b{NUMBER_PATTERN}\s*[- ]?\s*{RON_UNIT_PATTERN}\s*[- ]?\s*{RON_AREA_PATTERN}\b")
 
 NUMERIC_TOKEN = r"(?:\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)"
@@ -1211,6 +1236,13 @@ def normalize_resistance_area(value: float, prefix_unit: str) -> Tuple[float, st
     return value, "mOhm cm^2"
 
 
+def normalize_bfom(value: float, unit: str) -> Tuple[float, str]:
+    match = re.match(r"\s*(GW|MW|kW|W)", unit, flags=re.IGNORECASE)
+    prefix = match.group(1).lower() if match else "w"
+    scale = {"gw": 1e9, "mw": 1e6, "kw": 1e3, "w": 1.0}[prefix]
+    return value * scale, "W/cm^2"
+
+
 def detect_breakdown_voltage(source: dict) -> List[dict]:
     text = source.get("normalized_text")
     if text is None:
@@ -1420,6 +1452,64 @@ def detect_specific_on_resistance(source: dict) -> List[dict]:
     return evidence
 
 
+def detect_baliga_figure_of_merit(source: dict) -> List[dict]:
+    text = source.get("normalized_text")
+    if text is None:
+        text = normalize_for_search(source.get("text", "") or "")
+    evidence = []
+
+    title_like_source = source.get("source_type") in {"metadata_title", "grobid_title"}
+
+    for pattern in BFOM_PATTERNS_GENERAL:
+        for match in pattern.finditer(text):
+            try:
+                value = float(match.group("value").replace(",", ""))
+                unit_raw = match.group("unit")
+            except Exception:
+                continue
+
+            snippet = context_window(text, match.start(), match.end())
+            snippet_l = normalize_for_search(snippet).lower()
+
+            if should_skip_evidence_snippet(snippet):
+                continue
+
+            ctx = classify_context(snippet)
+            normalized_value, normalized_unit = normalize_bfom(value, unit_raw)
+
+            score = evidence_score_base(source.get("source_type", "")) + 5
+            if title_like_source:
+                score += 3
+            if source.get("source_type") == "grobid_abstract":
+                score += 1
+            if BFOM_KEYWORD_RE.search(snippet_l):
+                score += 6
+            if has_any(snippet, ["measured", "experimental", "fabricated", "forward", "differential", "demonstrating", "obtained"]):
+                score += 3
+            if has_any(snippet, ["drift layer", "theoretical", "calculated", "simulated"]):
+                score -= 1
+            if ctx["comparison_risk"]:
+                score -= 2
+
+            evidence.append({
+                "field": "baliga_figure_of_merit",
+                "value": value,
+                "raw_value": f"{value:g} {unit_raw}",
+                "unit": unit_raw,
+                "normalized_value": normalized_value,
+                "normalized_unit": normalized_unit,
+                "source_type": source.get("source_type", ""),
+                "source_id": source.get("source_id", ""),
+                "page": source.get("page", ""),
+                "heading": source.get("heading", ""),
+                "snippet": clean_space(snippet),
+                "score": score,
+                **ctx,
+            })
+
+    return evidence
+
+
 def detect_device_type(sources: List[dict], title: str = "") -> List[dict]:
     if title_suppresses_device_type(title):
         return []
@@ -1555,18 +1645,21 @@ def classify_paper(evidence: List[dict]) -> Tuple[str, str]:
     best_edge = best_evidence(evidence, "edge_termination")
     best_bv = best_evidence(evidence, "breakdown_voltage")
     best_ron = best_evidence(evidence, "specific_on_resistance")
+    best_bfom = best_evidence(evidence, "baliga_figure_of_merit")
 
     edge_score = int(best_edge.get("score", 0)) if best_edge else 0
     bv_score = int(best_bv.get("score", 0)) if best_bv else 0
     ron_score = int(best_ron.get("score", 0)) if best_ron else 0
+    bfom_score = int(best_bfom.get("score", 0)) if best_bfom else 0
 
     has_edge = edge_score >= 7
     has_bv = bv_score >= 7
     has_ron = ron_score >= 7
+    has_bfom = bfom_score >= 7
 
-    if has_edge and has_bv and has_ron:
+    if has_edge and has_bv and has_ron and has_bfom:
         risk_flags = []
-        for ev in [best_edge, best_bv, best_ron]:
+        for ev in [best_edge, best_bv, best_ron, best_bfom]:
             if ev and ev.get("reference_context"):
                 risk_flags.append("reference-section risk")
             elif ev and ev.get("comparison_risk"):
@@ -1578,7 +1671,7 @@ def classify_paper(evidence: List[dict]) -> Tuple[str, str]:
         if risk_flags:
             return "maybe", "; ".join(sorted(set(risk_flags)))
 
-        return "include_candidate", "diode evidence plus edge termination, breakdown voltage, and specific on-resistance evidence found"
+        return "include_candidate", "diode evidence plus edge termination, breakdown voltage, specific on-resistance, and Baliga figure-of-merit evidence found"
 
     missing = []
     if not has_edge:
@@ -1587,6 +1680,8 @@ def classify_paper(evidence: List[dict]) -> Tuple[str, str]:
         missing.append("breakdown voltage")
     if not has_ron:
         missing.append("specific on-resistance")
+    if not has_bfom:
+        missing.append("Baliga figure of merit")
 
     if len(missing) == 1:
         return "maybe", f"diode evidence found; missing or weak evidence for: {', '.join(missing)}"
@@ -1709,6 +1804,7 @@ def process_paper_dir(
             ("detect_edge_termination", detect_edge_termination),
             ("detect_breakdown_voltage", detect_breakdown_voltage),
             ("detect_specific_on_resistance", detect_specific_on_resistance),
+            ("detect_baliga_figure_of_merit", detect_baliga_figure_of_merit),
         ]
 
         for detector_name, detector in detector_specs:
@@ -1784,12 +1880,14 @@ def process_paper_dir(
             "edge_termination": len([ev for ev in evidence if ev.get("field") == "edge_termination"]),
             "breakdown_voltage": len([ev for ev in evidence if ev.get("field") == "breakdown_voltage"]),
             "specific_on_resistance": len([ev for ev in evidence if ev.get("field") == "specific_on_resistance"]),
+            "baliga_figure_of_merit": len([ev for ev in evidence if ev.get("field") == "baliga_figure_of_merit"]),
         },
         "best_evidence": {
             "device_type": best_evidence(evidence, "device_type"),
             "edge_termination": best_evidence(evidence, "edge_termination"),
             "breakdown_voltage": best_evidence(evidence, "breakdown_voltage"),
             "specific_on_resistance": best_evidence(evidence, "specific_on_resistance"),
+            "baliga_figure_of_merit": best_evidence(evidence, "baliga_figure_of_merit"),
         },
         "evidence": evidence,
     }
@@ -1896,13 +1994,16 @@ def write_review_csv(results: List[dict], path: Path) -> None:
         "edge_termination_guess",
         "breakdown_voltage_guess",
         "specific_on_resistance_guess",
+        "baliga_figure_of_merit_guess",
         "n_device_type_evidence",
         "n_edge_evidence",
         "n_breakdown_evidence",
         "n_ronsp_evidence",
+        "n_bfom_evidence",
         "edge_snippets",
         "breakdown_snippets",
         "ronsp_snippets",
+        "bfom_snippets",
     ]
 
     rows = []
@@ -1936,13 +2037,16 @@ def write_review_csv(results: List[dict], path: Path) -> None:
             "edge_termination_guess": summarize_edge_types(evidence),
             "breakdown_voltage_guess": summarize_values(evidence, "breakdown_voltage"),
             "specific_on_resistance_guess": summarize_values(evidence, "specific_on_resistance"),
+            "baliga_figure_of_merit_guess": summarize_values(evidence, "baliga_figure_of_merit"),
             "n_device_type_evidence": counts.get("device_type", 0),
             "n_edge_evidence": counts.get("edge_termination", 0),
             "n_breakdown_evidence": counts.get("breakdown_voltage", 0),
             "n_ronsp_evidence": counts.get("specific_on_resistance", 0),
+            "n_bfom_evidence": counts.get("baliga_figure_of_merit", 0),
             "edge_snippets": summarize_snippets(evidence, "edge_termination"),
             "breakdown_snippets": summarize_snippets(evidence, "breakdown_voltage"),
             "ronsp_snippets": summarize_snippets(evidence, "specific_on_resistance"),
+            "bfom_snippets": summarize_snippets(evidence, "baliga_figure_of_merit"),
         }
 
         rows.append(row)
@@ -1954,6 +2058,7 @@ def write_review_csv(results: List[dict], path: Path) -> None:
             -int(r["n_edge_evidence"]),
             -int(r["n_breakdown_evidence"]),
             -int(r["n_ronsp_evidence"]),
+            -int(r["n_bfom_evidence"]),
             r["title"].lower(),
         )
     )

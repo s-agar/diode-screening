@@ -51,6 +51,7 @@ FIELD_LABELS = {
     "edge_termination": "Edge termination",
     "breakdown_voltage": "Breakdown voltage",
     "specific_on_resistance": "Specific on-resistance",
+    "baliga_figure_of_merit": "Baliga figure of merit",
 }
 
 
@@ -451,7 +452,7 @@ def format_value(ev: Optional[dict]) -> str:
             return f"{value} ({raw})"
         return str(value)
 
-    if field in {"breakdown_voltage", "specific_on_resistance"}:
+    if field in {"breakdown_voltage", "specific_on_resistance", "baliga_figure_of_merit"}:
         raw = ev.get("raw_value") or ""
         normalized = ev.get("normalized_value")
         normalized_unit = ev.get("normalized_unit") or ev.get("unit") or ""
@@ -623,6 +624,7 @@ def render_paper_card(record: dict, index: int) -> str:
     edge_cell = render_field_cell(record, "edge_termination")
     bv_cell = render_field_cell(record, "breakdown_voltage")
     ron_cell = render_field_cell(record, "specific_on_resistance")
+    bfom_cell = render_field_cell(record, "baliga_figure_of_merit")
 
     pdf_link = ""
     if pdf_path:
@@ -678,6 +680,7 @@ def render_paper_card(record: dict, index: int) -> str:
         {edge_cell}
         {bv_cell}
         {ron_cell}
+        {bfom_cell}
       </div>
     </article>
     """
@@ -691,15 +694,17 @@ def sort_records(records: List[dict]) -> List[dict]:
         edge_best = best_evidence(record, "edge_termination")
         bv_best = best_evidence(record, "breakdown_voltage")
         ron_best = best_evidence(record, "specific_on_resistance")
+        bfom_best = best_evidence(record, "baliga_figure_of_merit")
 
         edge_score = safe_int(edge_best.get("score")) if edge_best else 0
         bv_score = safe_int(bv_best.get("score")) if bv_best else 0
         ron_score = safe_int(ron_best.get("score")) if ron_best else 0
+        bfom_score = safe_int(bfom_best.get("score")) if bfom_best else 0
 
         return (
             DECISION_ORDER.get(decision, 99),
-            -min(edge_score, bv_score, ron_score),
-            -(edge_score + bv_score + ron_score),
+            -min(edge_score, bv_score, ron_score, bfom_score),
+            -(edge_score + bv_score + ron_score + bfom_score),
             (metadata.get("title") or "").lower(),
         )
 
@@ -994,7 +999,7 @@ def render_html(records: List[dict]) -> str:
     .field-grid {{
       margin-top: 16px;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 14px;
     }}
 
@@ -1210,6 +1215,7 @@ def row_for_csv(record: dict) -> dict:
     best_edge = best_evidence(record, "edge_termination")
     best_bv = best_evidence(record, "breakdown_voltage")
     best_ron = best_evidence(record, "specific_on_resistance")
+    best_bfom = best_evidence(record, "baliga_figure_of_merit")
 
     def snippet(ev: Optional[dict]) -> str:
         return clean_space(ev.get("snippet", "")) if ev else ""
@@ -1250,9 +1256,15 @@ def row_for_csv(record: dict) -> dict:
         "specific_on_resistance_location": loc(best_ron),
         "specific_on_resistance_snippet": snippet(best_ron),
 
+        "baliga_figure_of_merit": format_value(best_bfom),
+        "baliga_figure_of_merit_score": score(best_bfom),
+        "baliga_figure_of_merit_location": loc(best_bfom),
+        "baliga_figure_of_merit_snippet": snippet(best_bfom),
+
         "n_edge_evidence": count_field_evidence(record, "edge_termination"),
         "n_breakdown_evidence": count_field_evidence(record, "breakdown_voltage"),
         "n_specific_on_resistance_evidence": count_field_evidence(record, "specific_on_resistance"),
+        "n_baliga_figure_of_merit_evidence": count_field_evidence(record, "baliga_figure_of_merit"),
     }
 
 
@@ -1289,9 +1301,15 @@ def write_csv(records: List[dict], path: Path) -> None:
         "specific_on_resistance_location",
         "specific_on_resistance_snippet",
 
+        "baliga_figure_of_merit",
+        "baliga_figure_of_merit_score",
+        "baliga_figure_of_merit_location",
+        "baliga_figure_of_merit_snippet",
+
         "n_edge_evidence",
         "n_breakdown_evidence",
         "n_specific_on_resistance_evidence",
+        "n_baliga_figure_of_merit_evidence",
     ]
 
     path.parent.mkdir(parents=True, exist_ok=True)
