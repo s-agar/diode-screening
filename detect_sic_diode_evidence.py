@@ -1657,7 +1657,8 @@ def classify_paper(evidence: List[dict]) -> Tuple[str, str]:
     has_ron = ron_score >= 7
     has_bfom = bfom_score >= 7
 
-    if has_edge and has_bv and has_ron and has_bfom:
+    # if has_edge and has_bv and has_ron and has_bfom:
+    if (has_edge + has_bv + has_ron + has_bfom) >= 3:
         risk_flags = []
         for ev in [best_edge, best_bv, best_ron, best_bfom]:
             if ev and ev.get("reference_context"):
@@ -1683,10 +1684,10 @@ def classify_paper(evidence: List[dict]) -> Tuple[str, str]:
     if not has_bfom:
         missing.append("Baliga figure of merit")
 
-    if len(missing) == 1:
+    if len(missing) == 2:
         return "maybe", f"diode evidence found; missing or weak evidence for: {', '.join(missing)}"
 
-    if len(missing) == 2:
+    if len(missing) == 3:
         return "low_priority_maybe", f"diode evidence found; missing or weak evidence for: {', '.join(missing)}"
 
     return "exclude_candidate", "diode evidence found, but no strong evidence for required fields"
