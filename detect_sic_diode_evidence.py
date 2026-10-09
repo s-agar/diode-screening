@@ -55,6 +55,12 @@ EDGE_TERMS = {
         "metal field-plate",
         "oxide field plate",
         "oxide field-plate",
+        "dieletric overlap",
+        "dielectric-overlap",
+        "passivation overlap",
+        "passivation-overlap",
+        "metal overlap",
+        "metal-overlap",
     ],
     "mesa": [
         "mesa",
